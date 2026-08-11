@@ -1,100 +1,91 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Dict
 import pandas as pd
-
 from architecture.mesh import Mesh
-from mapping.optimizer import greedy_swap_optimize
-
+from mapping.optimizer import greedy_swap_optimize, migration_cost, moved_tasks
 
 @dataclass
 class MappingSimConfig:
     rows: int = 8
     cols: int = 8
-
-    # A placement decision made at timestep t becomes active at t + horizon.
     horizon: int = 2
-
     optimizer_passes: int = 4
     remap_every: int = 1
-
+    migration_lambda: float = 0.0
+    task_state_size: float = 1.0
 
 class MappingSimulator:
-    """
-    Correct temporal semantics:
-
-    At timestep t:
-      1. Evaluate the placement that is ACTIVE at t against actual G_t.
-      2. Using information available at t, predict/choose a graph for t+H.
-      3. Optimize a new placement for that predicted graph.
-      4. Queue that placement so it becomes active at t+H.
-
-    Therefore every policy is evaluated on the SAME actual graph G_t.
-    What differs is the information used H steps earlier to choose the placement
-    that became active at t.
-    """
-
     def __init__(self, workload, policy, cfg: MappingSimConfig):
         self.workload = workload
         self.policy = policy
         self.cfg = cfg
         self.mesh = Mesh(cfg.rows, cfg.cols)
-
         if workload.num_cells > self.mesh.num_pes:
-            raise ValueError(
-                "Need at least one PE per task in v0."
-            )
-
-        # Identity placement at startup.
-        self.initial_placement = {
-            task: task
-            for task in range(workload.num_cells)
-        }
-
+            raise ValueError("Need at least one PE per task in v0.")
+        self.initial_placement = {task: task for task in range(workload.num_cells)}
         self.active_placement = dict(self.initial_placement)
-
-        # activation_timestep -> placement
         self.pending_placements: Dict[int, Dict[int, int]] = {}
-
+        self.placement_history: Dict[int, Dict[int, int]] = {}
         self.observed_graphs = []
         self.policy.reset()
 
+    def _expected_placement_at(self, timestep: int) -> Dict[int, int]:
+        if timestep < 0:
+            return dict(self.initial_placement)
+        if timestep in self.placement_history:
+            return dict(self.placement_history[timestep])
+        for tt in range(timestep, -1, -1):
+            if tt in self.pending_placements:
+                return dict(self.pending_placements[tt])
+            if tt in self.placement_history:
+                return dict(self.placement_history[tt])
+        return dict(self.initial_placement)
+
     def run(self):
         rows = []
+        cumulative_migration = 0.0
+        cumulative_comm = 0.0
+        is_static = (self.policy.name == "static")
 
         for t in range(self.workload.timesteps):
-            # ------------------------------------------------------------
-            # 1. Activate any placement whose lead time has elapsed.
-            # ------------------------------------------------------------
-            if t in self.pending_placements:
-                self.active_placement = self.pending_placements.pop(t)
+            previous_placement = dict(self.active_placement)
+            activation_migration = 0.0
+            activation_moved_tasks = 0
 
-            # ------------------------------------------------------------
-            # 2. Ground-truth communication occurring NOW.
-            # ------------------------------------------------------------
+            if (not is_static) and t in self.pending_placements:
+                next_placement = self.pending_placements.pop(t)
+                activation_migration = migration_cost(
+                    self.mesh, previous_placement, next_placement,
+                    state_size=self.cfg.task_state_size,
+                )
+                activation_moved_tasks = moved_tasks(previous_placement, next_placement)
+                self.active_placement = dict(next_placement)
+
+            self.placement_history[t] = dict(self.active_placement)
+            cumulative_migration += activation_migration
+
             actual_graph = self.workload.communication_graph(
-                query_step=t + 1,
-                amplitude_scale=1.0,
+                query_step=t + 1, amplitude_scale=1.0
+            )
+            actual_comm_cost = self.mesh.weighted_manhattan_cost(
+                actual_graph, self.active_placement
+            )
+            cumulative_comm += actual_comm_cost
+            actual_total_cost = (
+                actual_comm_cost
+                + self.cfg.migration_lambda * activation_migration
             )
 
-            # Evaluate ALL policies on actual G_t using the placement that
-            # was chosen H timesteps earlier.
-            actual_cost = self.mesh.weighted_manhattan_cost(
-                actual_graph,
-                self.active_placement,
-            )
-
-            # ------------------------------------------------------------
-            # 3. Make a placement decision for t + H.
-            # ------------------------------------------------------------
             target_t = t + self.cfg.horizon
-
-            predicted_cost = float("nan")
+            predicted_obj = float("nan")
+            predicted_comm = float("nan")
+            predicted_migration = float("nan")
             scheduled = False
 
             if (
-                target_t < self.workload.timesteps
+                (not is_static)
+                and target_t < self.workload.timesteps
                 and t % self.cfg.remap_every == 0
             ):
                 predicted_graph = self.policy.predicted_graph(
@@ -103,13 +94,21 @@ class MappingSimulator:
                     horizon=self.cfg.horizon,
                     observed_graphs=self.observed_graphs,
                 )
+                predecessor_placement = self._expected_placement_at(target_t - 1)
 
-                # Use the currently active placement as optimizer seed.
-                new_placement, predicted_cost = greedy_swap_optimize(
+                (
+                    new_placement,
+                    predicted_obj,
+                    predicted_comm,
+                    predicted_migration,
+                ) = greedy_swap_optimize(
                     self.mesh,
                     predicted_graph,
-                    self.active_placement,
+                    predecessor_placement,
                     max_passes=self.cfg.optimizer_passes,
+                    migration_lambda=self.cfg.migration_lambda,
+                    state_size=self.cfg.task_state_size,
+                    reference_placement=predecessor_placement,
                 )
 
                 self.pending_placements[target_t] = dict(new_placement)
@@ -119,18 +118,19 @@ class MappingSimulator:
                 {
                     "timestep": t,
                     "policy": self.policy.name,
-                    "actual_cost": actual_cost,
-                    "predicted_cost": predicted_cost,
+                    "actual_comm_cost": actual_comm_cost,
+                    "activation_migration_cost": activation_migration,
+                    "activation_moved_tasks": activation_moved_tasks,
+                    "actual_total_cost": actual_total_cost,
+                    "predicted_objective": predicted_obj,
+                    "predicted_comm_cost": predicted_comm,
+                    "predicted_migration_cost": predicted_migration,
                     "placement_scheduled": scheduled,
-                    "activation_target": (
-                        target_t if scheduled else -1
-                    ),
+                    "activation_target": target_t if scheduled else -1,
+                    "cumulative_comm_cost": cumulative_comm,
+                    "cumulative_migration_cost": cumulative_migration,
                 }
             )
-
-            # ------------------------------------------------------------
-            # 4. Only after evaluation/decision does G_t become history.
-            # ------------------------------------------------------------
             self.observed_graphs.append(actual_graph)
 
         return pd.DataFrame(rows)
