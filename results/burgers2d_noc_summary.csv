@@ -1,0 +1,8 @@
+policy,total_byte_hops,mean_max_link_load,p95_max_link_load,mean_estimated_latency,p95_estimated_latency,total_migration_byte_hops,total_objective,total_moved_tasks,objective_improvement_vs_reactive,byte_hop_improvement_vs_reactive,latency_improvement_vs_reactive,oracle_capture_vs_reactive
+burgers2d_no_crossflow,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+burgers2d_oracle,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+burgers2d_physics_exact,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+burgers2d_physics_imperfect,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+history,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+reactive,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
+static,0,0.0,0.0,0.0,0.0,0.0,0.0,0,,,,
