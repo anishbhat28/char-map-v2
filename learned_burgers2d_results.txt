@@ -1,0 +1,19 @@
+Learned policy inference device: cuda
+Held-out workload late nonlocal-edge fraction: 1.0000
+Running static ...
+Running reactive ...
+Running history ...
+Running exact_physics ...
+Running learned_dynamics ...
+Running perfect_future_graph ...
+
+=== LEARNED-DYNAMICS CHAR-MAP ===
+              policy  total_byte_hops  mean_max_link_load  p95_max_link_load  mean_estimated_latency  p95_estimated_latency  total_migration_byte_hops  total_objective  total_moved_tasks  objective_improvement_vs_reactive  byte_hop_improvement_vs_reactive  latency_improvement_vs_reactive  perfect_prediction_capture
+       exact_physics        3418880.0          453.333333              576.0               15.770833                  21.00                   164352.0        3675136.0                272                           1.163904                          1.159491                         1.219947                    1.000000
+    learned_dynamics        3418880.0          453.333333              576.0               15.770833                  21.00                   164352.0        3675136.0                272                           1.163904                          1.159491                         1.219947                    1.000000
+perfect_future_graph        3418880.0          453.333333              576.0               15.770833                  21.00                   164352.0        3675136.0                272                           1.163904                          1.159491                         1.219947                    1.000000
+             history        3208448.0          634.666667             1024.0               18.406250                  28.00                   598528.0        3751424.0                948                           1.140235                          1.235538                         1.045274                    0.873353
+            reactive        3964160.0          621.333333             1024.0               19.239583                  28.25                   149504.0        4277504.0                247                           1.000000                          1.000000                         1.000000                    0.000000
+              static        5320960.0          586.666667             1024.0               19.312500                  29.00                        0.0        5546240.0                  0                           0.771244                          0.745008                         0.996224                   -2.106247
+
+Exact physics matches perfect-future-graph reference.
